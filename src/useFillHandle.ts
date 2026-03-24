@@ -2,20 +2,19 @@
  * useFillHandle — Userland drag-fill handle for MUI X DataGrid Premium.
  *
  * Adds an Excel-style fill handle to the bottom-right corner of the cell
- * selection.  The user drags it up/down or left/right to fill target cells
- * with the source values in a cycling pattern.
- *
- * Dragging is locked to a single axis (vertical or horizontal) based on
- * the dominant direction of initial mouse movement — just like Excel.
+ * selection.  The user drags it vertically to extend rows or horizontally
+ * to extend columns, filling target cells with source values in a cycling
+ * pattern.
  *
  * Only PUBLIC DataGridPremium APIs are used — no internal imports.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type {
   GridRowId,
   GridCellParams,
   GridColDef,
+  GridApiPremium,
 } from '@mui/x-data-grid-premium';
 
 // ---------------------------------------------------------------------------
@@ -29,7 +28,7 @@ export interface FillHandleApi {
   getCellParams: (id: GridRowId, field: string) => GridCellParams;
   getColumn: (field: string) => GridColDef;
   setCellSelectionModel: (
-    model: Record<GridRowId, Record<string, boolean>>,
+    model: Record<GridRowId, Record<string, boolean>>
   ) => void;
   getCellSelectionModel: () => Record<GridRowId, Record<string, boolean>>;
   getSortedRowIds: () => GridRowId[];
@@ -37,61 +36,55 @@ export interface FillHandleApi {
   updateRows: (updates: Array<Record<string, unknown>>) => void;
   subscribeEvent: (
     event: string,
-    handler: (...args: unknown[]) => void,
+    handler: (...args: unknown[]) => void
   ) => () => void;
 }
 
-export interface FillUpdate {
-  id: GridRowId;
-  [field: string]: unknown;
-}
-
-type ApiRef = React.RefObject<FillHandleApi>;
-
-type DragAxis = 'none' | 'vertical' | 'horizontal';
-
-// Minimum pixels moved before we lock to an axis
-const AXIS_LOCK_THRESHOLD = 5;
+type ApiRef = React.RefObject<GridApiPremium>;
 
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useFillHandle(
-  apiRef: ApiRef,
-  onFill?: (updates: FillUpdate[]) => void,
-): void {
-  // Keep onFill in a ref so the effect doesn't re-run when it changes.
-  const onFillRef = useRef(onFill);
-  onFillRef.current = onFill;
+export function useFillHandle(apiRef: ApiRef) {
+  // Track which cell shows the fill-handle indicator.  Stored in React
+  // state so that getCellClassName triggers a grid re-render — imperative
+  // classList mutations are lost when memoized cells re-render.
+  const [fillHandleCell, setFillHandleCell] = useState<{
+    id: GridRowId;
+    field: string;
+  } | null>(null);
+
+  // Provide getCellClassName for the consumer to pass to <DataGridPremium>.
+  const getCellClassName = useCallback(
+    (params: GridCellParams) => {
+      if (
+        fillHandleCell &&
+        params.id === fillHandleCell.id &&
+        params.field === fillHandleCell.field
+      ) {
+        return 'fill-handle-cell';
+      }
+      return '';
+    },
+    [fillHandleCell]
+  );
 
   useEffect(() => {
     const api = apiRef.current;
     if (!api) return;
 
-    // ── Drag state ───────────────────────────────────────────────────
+    // ── Drag state (plain variables — safe inside a single effect) ───
     let isDragging = false;
-    let dragAxis: DragAxis = 'none';
-    let startClientX = 0;
-    let startClientY = 0;
-
-    // Source selection bounds
-    let sourceRowStart = -1;
-    let sourceRowEnd = -1;
-    let sourceColStart = -1;
-    let sourceColEnd = -1;
-
-    // Source fields (columns) in visual order
     let sourceFields: string[] = [];
-    // Source row ids in visual order
-    let sourceRowIds: GridRowId[] = [];
-    // Source values: sourceValues[colIdx][rowIdx]
-    let sourceValues: unknown[][] = [];
-
-    // Current fill targets
+    let sourceStartRowIdx = -1;
+    let sourceEndRowIdx = -1;
+    let sourceStartColIdx = -1;
+    let sourceEndColIdx = -1;
+    let sourceValuesByField = new Map<string, unknown[]>();
+    let fillDirection: 'vertical' | 'horizontal' | null = null;
     let currentTargetRowIds: GridRowId[] = [];
     let currentTargetFields: string[] = [];
-
     let decoratedEls = new Set<HTMLElement>();
     let rafId = 0;
 
@@ -101,19 +94,18 @@ export function useFillHandle(
       return api.rootElementRef?.current ?? null;
     }
 
-    function getCellEl(
-      rowId: GridRowId,
-      field: string,
-    ): HTMLElement | null {
+    /** Locate a cell's DOM element via data-attributes. */
+    function getCellEl(rowId: GridRowId, field: string): HTMLElement | null {
       const root = getRootEl();
       if (!root) return null;
       const escapedId = CSS.escape(String(rowId));
       const escapedField = CSS.escape(field);
       return root.querySelector<HTMLElement>(
-        `[data-id="${escapedId}"] [data-field="${escapedField}"]`,
+        `[data-id="${escapedId}"] [data-field="${escapedField}"]`
       );
     }
 
+    /** Strip all preview CSS classes from previously-decorated elements. */
     function clearPreviewClasses(): void {
       for (const el of decoratedEls) {
         el.classList.remove(
@@ -121,12 +113,17 @@ export function useFillHandle(
           'fill-preview-top',
           'fill-preview-bottom',
           'fill-preview-left',
-          'fill-preview-right',
+          'fill-preview-right'
         );
       }
       decoratedEls = new Set();
     }
 
+    /**
+     * Resolve a dataset.id string to the matching GridRowId (which may
+     * be a number).  Checks sorted IDs for both the raw string and its
+     * numeric conversion.
+     */
     function resolveRowId(raw: string): GridRowId | null {
       const sortedIds = api.getSortedRowIds();
       if (sortedIds.includes(raw as GridRowId)) return raw;
@@ -135,48 +132,52 @@ export function useFillHandle(
       return null;
     }
 
-    // ── 1. Position the fill handle on the bottom-right selected cell ─
+    /**
+     * Compute the bottom-right cell of the current selection.
+     */
+    function getBottomRightCell(): { id: GridRowId; field: string } | null {
+      const selected = api.getSelectedCellsAsArray();
+      if (selected.length === 0) return null;
 
-    const unsubSelection = api.subscribeEvent(
-      'cellSelectionChange',
-      () => {
-        const root = getRootEl();
-        if (!root) return;
+      const sortedIds = api.getSortedRowIds();
+      const visibleCols = api.getVisibleColumns();
 
-        root
-          .querySelectorAll('.fill-handle-cell')
-          .forEach((el) => el.classList.remove('fill-handle-cell'));
+      let bestRowIdx = -1;
+      let bestColIdx = -1;
+      let bestCell: { id: GridRowId; field: string } | null = null;
 
+      for (const cell of selected) {
+        const ri = sortedIds.indexOf(cell.id);
+        const ci = visibleCols.findIndex((c) => c.field === cell.field);
+        if (ri < 0 || ci < 0) continue;
+        if (ri > bestRowIdx || (ri === bestRowIdx && ci > bestColIdx)) {
+          bestRowIdx = ri;
+          bestColIdx = ci;
+          bestCell = cell;
+        }
+      }
+
+      return bestCell;
+    }
+
+    // ── 1. Track which cell should show the fill handle ─────────────
+
+    const unsubSelection = api.subscribeEvent('cellSelectionChange', () => {
+      setFillHandleCell(getBottomRightCell());
+    });
+
+    // When a cell receives focus (first click), the selection model may
+    // not be updated yet.  Set the handle on the focused cell — the next
+    // cellSelectionChange will correct it for multi-cell selections.
+    const unsubFocusIn = api.subscribeEvent(
+      'cellFocusIn',
+      (...args: unknown[]) => {
+        const params = args[0] as GridCellParams;
         const selected = api.getSelectedCellsAsArray();
-        if (selected.length === 0) return;
-
-        const sortedIds = api.getSortedRowIds();
-        const visibleCols = api.getVisibleColumns();
-
-        let bestRowIdx = -1;
-        let bestColIdx = -1;
-        let bestCell: { id: GridRowId; field: string } | null = null;
-
-        for (const cell of selected) {
-          const ri = sortedIds.indexOf(cell.id);
-          const ci = visibleCols.findIndex((c) => c.field === cell.field);
-          if (ri < 0 || ci < 0) continue;
-          if (
-            ri > bestRowIdx ||
-            (ri === bestRowIdx && ci > bestColIdx)
-          ) {
-            bestRowIdx = ri;
-            bestColIdx = ci;
-            bestCell = cell;
-          }
+        if (selected.length === 0) {
+          setFillHandleCell({ id: params.id, field: params.field });
         }
-
-        if (bestCell) {
-          getCellEl(bestCell.id, bestCell.field)?.classList.add(
-            'fill-handle-cell',
-          );
-        }
-      },
+      }
     );
 
     // ── 2. Detect mousedown on the fill handle ──────────────────────
@@ -189,8 +190,19 @@ export function useFillHandle(
           defaultMuiPrevented?: boolean;
         };
 
+        // Check if the clicked cell is the bottom-right of the selection.
+        // On the first click the selection may be empty — fall back to
+        // treating the clicked cell itself as the sole source.
+        const bottomRight = getBottomRightCell();
+        if (
+          bottomRight &&
+          (bottomRight.id !== params.id || bottomRight.field !== params.field)
+        ) {
+          return;
+        }
+
         const cellEl = getCellEl(params.id, params.field);
-        if (!cellEl?.classList.contains('fill-handle-cell')) return;
+        if (!cellEl) return;
 
         // Hit-test: pointer must be within 14 px of the cell's
         // bottom-right corner (the fill handle zone).
@@ -209,64 +221,73 @@ export function useFillHandle(
         event.stopPropagation();
         event.defaultMuiPrevented = true;
 
-        // Gather ALL selected cells and compute bounds
-        const selected = api.getSelectedCellsAsArray();
-        if (selected.length === 0) return;
+        // Gather selected cells — if the selection model is empty (first
+        // click race), treat the clicked cell as a single-cell selection.
+        let selected = api.getSelectedCellsAsArray();
+        if (selected.length === 0) {
+          selected = [{ id: params.id, field: params.field }];
+        }
 
         const sortedIds = api.getSortedRowIds();
         const visibleCols = api.getVisibleColumns();
 
-        let minRow = Infinity, maxRow = -1;
-        let minCol = Infinity, maxCol = -1;
+        let minRowIdx = Infinity;
+        let maxRowIdx = -1;
+        let minColIdx = Infinity;
+        let maxColIdx = -1;
+        const fieldSet = new Set<string>();
 
         for (const cell of selected) {
           const ri = sortedIds.indexOf(cell.id);
           const ci = visibleCols.findIndex((c) => c.field === cell.field);
           if (ri < 0 || ci < 0) continue;
-          minRow = Math.min(minRow, ri);
-          maxRow = Math.max(maxRow, ri);
-          minCol = Math.min(minCol, ci);
-          maxCol = Math.max(maxCol, ci);
+          if (ri < minRowIdx) minRowIdx = ri;
+          if (ri > maxRowIdx) maxRowIdx = ri;
+          if (ci < minColIdx) minColIdx = ci;
+          if (ci > maxColIdx) maxColIdx = ci;
+          fieldSet.add(cell.field);
         }
 
-        if (maxRow < 0 || maxCol < 0) return;
+        if (maxRowIdx < 0) return;
 
-        // Collect source fields in visual order, filtering to editable
-        const fields: string[] = [];
-        for (let c = minCol; c <= maxCol; c++) {
-          const col = visibleCols[c];
-          if (col.editable) fields.push(col.field);
-        }
-        if (fields.length === 0) return;
+        // Sort fields by visible column order
+        const orderedFields = visibleCols
+          .filter((c) => fieldSet.has(c.field))
+          .map((c) => c.field);
 
-        // Collect source row ids in visual order
-        const rowIds: GridRowId[] = [];
-        for (let r = minRow; r <= maxRow; r++) {
-          rowIds.push(sortedIds[r]);
-        }
-
-        // Build source values matrix: [colIdx][rowIdx]
-        const values: unknown[][] = fields.map((field) =>
-          rowIds.map((id) => api.getCellParams(id, field).value),
+        // Check at least one selected column is editable
+        const hasEditable = orderedFields.some(
+          (f) => api.getColumn(f).editable
         );
+        if (!hasEditable) return;
+
+        // Collect source values per field in row order
+        const valuesByField = new Map<string, unknown[]>();
+        for (const field of orderedFields) {
+          const values: unknown[] = [];
+          for (let i = minRowIdx; i <= maxRowIdx; i++) {
+            const id = sortedIds[i];
+            if (selected.some((c) => c.id === id && c.field === field)) {
+              values.push(api.getCellParams(id, field).value);
+            }
+          }
+          valuesByField.set(field, values);
+        }
 
         isDragging = true;
-        dragAxis = 'none';
-        startClientX = event.clientX;
-        startClientY = event.clientY;
-        sourceRowStart = minRow;
-        sourceRowEnd = maxRow;
-        sourceColStart = minCol;
-        sourceColEnd = maxCol;
-        sourceFields = fields;
-        sourceRowIds = rowIds;
-        sourceValues = values;
+        sourceFields = orderedFields;
+        sourceStartRowIdx = minRowIdx;
+        sourceEndRowIdx = maxRowIdx;
+        sourceStartColIdx = minColIdx;
+        sourceEndColIdx = maxColIdx;
+        sourceValuesByField = valuesByField;
+        fillDirection = null;
         currentTargetRowIds = [];
         currentTargetFields = [];
 
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
-      },
+      }
     );
 
     // ── 3. Mousemove — throttled via requestAnimationFrame ──────────
@@ -274,30 +295,11 @@ export function useFillHandle(
     function onMouseMove(e: MouseEvent): void {
       if (!isDragging) return;
       cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() =>
-        handleMove(e.clientX, e.clientY),
-      );
+      rafId = requestAnimationFrame(() => handleMove(e.clientX, e.clientY));
     }
 
     function handleMove(clientX: number, clientY: number): void {
-      // Determine axis lock if not yet locked
-      if (dragAxis === 'none') {
-        const dx = Math.abs(clientX - startClientX);
-        const dy = Math.abs(clientY - startClientY);
-        if (dx < AXIS_LOCK_THRESHOLD && dy < AXIS_LOCK_THRESHOLD) {
-          // Haven't moved enough yet — don't show any preview
-          currentTargetRowIds = [];
-          currentTargetFields = [];
-          clearPreviewClasses();
-          return;
-        }
-        dragAxis = dy >= dx ? 'vertical' : 'horizontal';
-      }
-
-      const sortedIds = api.getSortedRowIds();
-      const visibleCols = api.getVisibleColumns();
-
-      // Walk DOM to find the row and column under the pointer
+      // Walk the elements under the pointer to find target row and field
       const hits = document.elementsFromPoint(clientX, clientY);
       let targetRowId: GridRowId | null = null;
       let targetField: string | null = null;
@@ -317,114 +319,114 @@ export function useFillHandle(
         if (targetRowId !== null && targetField !== null) break;
       }
 
-      if (dragAxis === 'vertical') {
-        // ── Vertical fill: extend rows, keep source columns ──
-        if (targetRowId === null) {
-          currentTargetRowIds = [];
-          currentTargetFields = [];
-          clearPreviewClasses();
-          return;
-        }
-
-        const targetIdx = sortedIds.indexOf(targetRowId);
-        if (targetIdx < 0) return;
-
-        const newTargetRows: GridRowId[] = [];
-        if (targetIdx > sourceRowEnd) {
-          for (let i = sourceRowEnd + 1; i <= targetIdx; i++) {
-            newTargetRows.push(sortedIds[i]);
-          }
-        } else if (targetIdx < sourceRowStart) {
-          for (let i = targetIdx; i < sourceRowStart; i++) {
-            newTargetRows.push(sortedIds[i]);
-          }
-        }
-
-        currentTargetRowIds = newTargetRows;
-        currentTargetFields = sourceFields;
-
-        // Apply preview decoration
-        const nextDecorated = new Set<HTMLElement>();
-        for (let ri = 0; ri < newTargetRows.length; ri++) {
-          for (let fi = 0; fi < sourceFields.length; fi++) {
-            const el = getCellEl(newTargetRows[ri], sourceFields[fi]);
-            if (!el) continue;
-
-            el.classList.add('fill-preview');
-            if (ri === 0) el.classList.add('fill-preview-top');
-            if (ri === newTargetRows.length - 1) el.classList.add('fill-preview-bottom');
-            if (fi === 0) el.classList.add('fill-preview-left');
-            if (fi === sourceFields.length - 1) el.classList.add('fill-preview-right');
-
-            nextDecorated.add(el);
-          }
-        }
-
-        for (const el of decoratedEls) {
-          if (!nextDecorated.has(el)) {
-            el.classList.remove(
-              'fill-preview', 'fill-preview-top', 'fill-preview-bottom',
-              'fill-preview-left', 'fill-preview-right',
-            );
-          }
-        }
-        decoratedEls = nextDecorated;
-
-      } else {
-        // ── Horizontal fill: extend columns, keep source rows ──
-        if (targetField === null) {
-          currentTargetRowIds = [];
-          currentTargetFields = [];
-          clearPreviewClasses();
-          return;
-        }
-
-        const targetColIdx = visibleCols.findIndex((c) => c.field === targetField);
-        if (targetColIdx < 0) return;
-
-        const newTargetFields: string[] = [];
-        if (targetColIdx > sourceColEnd) {
-          for (let i = sourceColEnd + 1; i <= targetColIdx; i++) {
-            const col = visibleCols[i];
-            if (col.editable) newTargetFields.push(col.field);
-          }
-        } else if (targetColIdx < sourceColStart) {
-          for (let i = targetColIdx; i < sourceColStart; i++) {
-            const col = visibleCols[i];
-            if (col.editable) newTargetFields.push(col.field);
-          }
-        }
-
-        currentTargetRowIds = sourceRowIds;
-        currentTargetFields = newTargetFields;
-
-        // Apply preview decoration
-        const nextDecorated = new Set<HTMLElement>();
-        for (let ri = 0; ri < sourceRowIds.length; ri++) {
-          for (let fi = 0; fi < newTargetFields.length; fi++) {
-            const el = getCellEl(sourceRowIds[ri], newTargetFields[fi]);
-            if (!el) continue;
-
-            el.classList.add('fill-preview');
-            if (ri === 0) el.classList.add('fill-preview-top');
-            if (ri === sourceRowIds.length - 1) el.classList.add('fill-preview-bottom');
-            if (fi === 0) el.classList.add('fill-preview-left');
-            if (fi === newTargetFields.length - 1) el.classList.add('fill-preview-right');
-
-            nextDecorated.add(el);
-          }
-        }
-
-        for (const el of decoratedEls) {
-          if (!nextDecorated.has(el)) {
-            el.classList.remove(
-              'fill-preview', 'fill-preview-top', 'fill-preview-bottom',
-              'fill-preview-left', 'fill-preview-right',
-            );
-          }
-        }
-        decoratedEls = nextDecorated;
+      if (targetRowId === null) {
+        // Pointer left the grid — clear preview
+        currentTargetRowIds = [];
+        currentTargetFields = [];
+        fillDirection = null;
+        clearPreviewClasses();
+        return;
       }
+
+      const sortedIds = api.getSortedRowIds();
+      const visibleCols = api.getVisibleColumns();
+      const targetRowIdx = sortedIds.indexOf(targetRowId);
+      const targetColIdx = targetField
+        ? visibleCols.findIndex((c) => c.field === targetField)
+        : -1;
+
+      if (targetRowIdx < 0) return;
+
+      const isOutsideRowRange =
+        targetRowIdx > sourceEndRowIdx || targetRowIdx < sourceStartRowIdx;
+      const isOutsideColRange =
+        targetColIdx > sourceEndColIdx || targetColIdx < sourceStartColIdx;
+
+      // Lock axis on first movement outside the source range (like Excel).
+      // Once locked, ignore movement on the other axis to prevent diagonal fill.
+      if (fillDirection === null) {
+        if (isOutsideRowRange) {
+          fillDirection = 'vertical';
+        } else if (isOutsideColRange) {
+          fillDirection = 'horizontal';
+        }
+      }
+
+      const newTargetRowIds: GridRowId[] = [];
+      let newTargetFields: string[] = [];
+
+      if (fillDirection === 'vertical') {
+        // Vertical fill: extend rows, keep all source columns
+        newTargetFields = [...sourceFields];
+
+        if (targetRowIdx > sourceEndRowIdx) {
+          for (let i = sourceEndRowIdx + 1; i <= targetRowIdx; i++) {
+            newTargetRowIds.push(sortedIds[i]);
+          }
+        } else if (targetRowIdx < sourceStartRowIdx) {
+          for (let i = targetRowIdx; i < sourceStartRowIdx; i++) {
+            newTargetRowIds.push(sortedIds[i]);
+          }
+        }
+        // If pointer is back within source row range, newTargetRowIds stays empty
+      } else if (fillDirection === 'horizontal') {
+        // Horizontal fill: extend columns, keep source rows
+        for (let i = sourceStartRowIdx; i <= sourceEndRowIdx; i++) {
+          newTargetRowIds.push(sortedIds[i]);
+        }
+
+        if (targetColIdx > sourceEndColIdx) {
+          for (let i = sourceEndColIdx + 1; i <= targetColIdx; i++) {
+            newTargetFields.push(visibleCols[i].field);
+          }
+        } else if (targetColIdx < sourceStartColIdx) {
+          for (let i = targetColIdx; i < sourceStartColIdx; i++) {
+            newTargetFields.push(visibleCols[i].field);
+          }
+        }
+        // If pointer is back within source col range, newTargetFields stays empty
+      }
+
+      currentTargetRowIds = newTargetRowIds;
+      currentTargetFields = newTargetFields;
+
+      // Apply preview decoration (rows × fields)
+      const nextDecorated = new Set<HTMLElement>();
+
+      for (let rowIdx = 0; rowIdx < newTargetRowIds.length; rowIdx++) {
+        for (let colIdx = 0; colIdx < newTargetFields.length; colIdx++) {
+          const el = getCellEl(
+            newTargetRowIds[rowIdx],
+            newTargetFields[colIdx]
+          );
+          if (!el) continue;
+
+          el.classList.add('fill-preview');
+          if (rowIdx === 0) el.classList.add('fill-preview-top');
+          if (rowIdx === newTargetRowIds.length - 1)
+            el.classList.add('fill-preview-bottom');
+          if (colIdx === 0) el.classList.add('fill-preview-left');
+          if (colIdx === newTargetFields.length - 1)
+            el.classList.add('fill-preview-right');
+
+          nextDecorated.add(el);
+        }
+      }
+
+      // Remove classes from cells that left the target set
+      for (const el of decoratedEls) {
+        if (!nextDecorated.has(el)) {
+          el.classList.remove(
+            'fill-preview',
+            'fill-preview-top',
+            'fill-preview-bottom',
+            'fill-preview-left',
+            'fill-preview-right'
+          );
+        }
+      }
+
+      decoratedEls = nextDecorated;
     }
 
     // ── 4. Mouseup — apply the fill and extend the selection ────────
@@ -434,71 +436,85 @@ export function useFillHandle(
       document.removeEventListener('mouseup', onMouseUp);
       cancelAnimationFrame(rafId);
 
-      if (isDragging && sourceValues.length > 0) {
-        const updates: FillUpdate[] = [];
+      if (
+        isDragging &&
+        currentTargetRowIds.length > 0 &&
+        currentTargetFields.length > 0 &&
+        fillDirection
+      ) {
+        const updates: Array<{ id: GridRowId; [field: string]: unknown }> = [];
 
-        if (dragAxis === 'vertical' && currentTargetRowIds.length > 0) {
-          // Fill each target row with source values cycling per column
-          for (let ri = 0; ri < currentTargetRowIds.length; ri++) {
-            const id = currentTargetRowIds[ri];
-            const patch: FillUpdate = { id };
-            for (let ci = 0; ci < sourceFields.length; ci++) {
-              const colValues = sourceValues[ci];
-              patch[sourceFields[ci]] = colValues[ri % colValues.length];
+        if (fillDirection === 'vertical') {
+          // Each source field fills its own target rows independently
+          for (const field of currentTargetFields) {
+            if (!api.getColumn(field).editable) continue;
+            const values = sourceValuesByField.get(field) ?? [];
+            if (values.length === 0) continue;
+            for (let i = 0; i < currentTargetRowIds.length; i++) {
+              const id = currentTargetRowIds[i];
+              const existing = updates.find((u) => u.id === id);
+              if (existing) {
+                existing[field] = values[i % values.length];
+              } else {
+                updates.push({ id, [field]: values[i % values.length] });
+              }
             }
-            updates.push(patch);
           }
-        } else if (dragAxis === 'horizontal' && currentTargetFields.length > 0) {
-          // Fill each source row across target columns
-          for (const id of sourceRowIds) {
-            const rowIdx = sourceRowIds.indexOf(id);
-            const patch: FillUpdate = { id };
-            for (let ci = 0; ci < currentTargetFields.length; ci++) {
-              // Cycle through source columns' values for this row
-              const srcColIdx = ci % sourceValues.length;
-              patch[currentTargetFields[ci]] = sourceValues[srcColIdx][rowIdx];
+        } else if (fillDirection === 'horizontal') {
+          // Map source columns to target columns by position offset
+          for (
+            let colOffset = 0;
+            colOffset < currentTargetFields.length;
+            colOffset++
+          ) {
+            const targetField = currentTargetFields[colOffset];
+            if (!api.getColumn(targetField).editable) continue;
+            const sourceField = sourceFields[colOffset % sourceFields.length];
+            const values = sourceValuesByField.get(sourceField) ?? [];
+            if (values.length === 0) continue;
+            for (
+              let rowIdx = 0;
+              rowIdx < currentTargetRowIds.length;
+              rowIdx++
+            ) {
+              const id = currentTargetRowIds[rowIdx];
+              const existing = updates.find((u) => u.id === id);
+              if (existing) {
+                existing[targetField] = values[rowIdx % values.length];
+              } else {
+                updates.push({
+                  id,
+                  [targetField]: values[rowIdx % values.length],
+                });
+              }
             }
-            updates.push(patch);
           }
         }
 
         if (updates.length > 0) {
           api.updateRows(updates);
-          onFillRef.current?.(updates);
-
-          // Extend cell selection to include filled cells
-          const model = { ...api.getCellSelectionModel() };
-
-          if (dragAxis === 'vertical') {
-            for (const id of currentTargetRowIds) {
-              if (!model[id]) model[id] = {};
-              for (const field of sourceFields) {
-                model[id][field] = true;
-              }
-            }
-          } else if (dragAxis === 'horizontal') {
-            for (const id of sourceRowIds) {
-              if (!model[id]) model[id] = {};
-              for (const field of currentTargetFields) {
-                model[id][field] = true;
-              }
-            }
-          }
-
-          api.setCellSelectionModel(model);
         }
+
+        // Extend cell selection to include filled cells
+        const model = { ...api.getCellSelectionModel() };
+        for (const id of currentTargetRowIds) {
+          if (!model[id]) model[id] = {};
+          for (const field of currentTargetFields) {
+            model[id][field] = true;
+          }
+        }
+        api.setCellSelectionModel(model);
       }
 
       // Reset
       isDragging = false;
-      dragAxis = 'none';
-      sourceRowStart = -1;
-      sourceRowEnd = -1;
-      sourceColStart = -1;
-      sourceColEnd = -1;
       sourceFields = [];
-      sourceRowIds = [];
-      sourceValues = [];
+      sourceStartRowIdx = -1;
+      sourceEndRowIdx = -1;
+      sourceStartColIdx = -1;
+      sourceEndColIdx = -1;
+      sourceValuesByField = new Map();
+      fillDirection = null;
       currentTargetRowIds = [];
       currentTargetFields = [];
       clearPreviewClasses();
@@ -508,6 +524,7 @@ export function useFillHandle(
 
     return () => {
       unsubSelection();
+      unsubFocusIn();
       unsubMouseDown();
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
@@ -515,4 +532,7 @@ export function useFillHandle(
       clearPreviewClasses();
     };
   }, [apiRef]);
+
+  return { getCellClassName };
 }
+

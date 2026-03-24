@@ -8,7 +8,7 @@ import {
   type GridRowModel,
   type GridRowsProp,
 } from '@mui/x-data-grid-premium';
-import { useFillHandle, type FillUpdate } from './useFillHandle';
+import { useFillHandle } from './useFillHandle';
 
 // ---------------------------------------------------------------------------
 // Column definitions — all editable except `id`
@@ -71,19 +71,8 @@ export default function Demo() {
   const apiRef = useGridApiRef();
   const [rows, setRows] = React.useState<GridRowsProp>(initialRows);
 
-  // Sync fill-handle updates back into React state
-  const handleFill = React.useCallback((updates: FillUpdate[]) => {
-    setRows((prev) => {
-      const patchMap = new Map(updates.map((u) => [u.id, u]));
-      return prev.map((row) => {
-        const patch = patchMap.get(row.id);
-        return patch ? { ...row, ...patch } : row;
-      });
-    });
-  }, []);
-
   // Activate the fill handle
-  useFillHandle(apiRef, handleFill);
+  const { getCellClassName } = useFillHandle(apiRef);
 
   // Keep React state in sync when the user edits a cell inline
   const processRowUpdate = React.useCallback(
@@ -113,6 +102,7 @@ export default function Demo() {
           rows={rows}
           columns={columns}
           cellSelection
+          getCellClassName={getCellClassName}
           processRowUpdate={processRowUpdate}
           sx={{
             height: '100%',
