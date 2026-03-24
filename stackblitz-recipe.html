@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Open in StackBlitz — DataGrid Premium — Drag Fill Handle (Userland)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex;
+           justify-content: center; align-items: center; height: 100vh; }
+    p { font-size: 1.2rem; color: #555; }
+  </style>
+</head>
+<body>
+  <p>Opening StackBlitz…</p>
+  <form id="sbForm" method="post" action="https://stackblitz.com/run" target="_self">
+    <input type="hidden" name="project[title]" value="DataGrid Premium — Drag Fill Handle (Userland)" />
+    <input type="hidden" name="project[description]" value="Excel-style drag fill handle for MUI X DataGridPremium using only public APIs. Select cells, then drag the blue square at the bottom-right to fill." />
+    <input type="hidden" name="project[template]" value="node" />
+    <input type="hidden" name="project[files][index.html]" value="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+  &lt;head&gt;
+    &lt;meta charset=&quot;UTF-8&quot; /&gt;
+    &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot; /&gt;
+    &lt;title&gt;DataGrid Premium — Drag Fill Handle&lt;/title&gt;
+    &lt;link
+      rel=&quot;stylesheet&quot;
+      href=&quot;https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&amp;display=swap&quot;
+    /&gt;
+  &lt;/head&gt;
+  &lt;body&gt;
+    &lt;div id=&quot;root&quot;&gt;&lt;/div&gt;
+    &lt;script type=&quot;module&quot; src=&quot;/src/index.tsx&quot;&gt;&lt;/script&gt;
+  &lt;/body&gt;
+&lt;/html&gt;
+" />
+    <input type="hidden" name="project[files][package.json]" value="{
+  &quot;name&quot;: &quot;datagrid-premium-fill-handle&quot;,
+  &quot;private&quot;: true,
+  &quot;version&quot;: &quot;1.0.0&quot;,
+  &quot;scripts&quot;: {
+    &quot;dev&quot;: &quot;vite&quot;,
+    &quot;build&quot;: &quot;vite build&quot;
+  },
+  &quot;dependencies&quot;: {
+    &quot;@emotion/react&quot;: &quot;latest&quot;,
+    &quot;@emotion/styled&quot;: &quot;latest&quot;,
+    &quot;@mui/material&quot;: &quot;latest&quot;,
+    &quot;@mui/x-data-grid-premium&quot;: &quot;latest&quot;,
+    &quot;react&quot;: &quot;latest&quot;,
+    &quot;react-dom&quot;: &quot;latest&quot;
+  },
+  &quot;devDependencies&quot;: {
+    &quot;@vitejs/plugin-react&quot;: &quot;^4.3.0&quot;,
+    &quot;typescript&quot;: &quot;latest&quot;,
+    &quot;vite&quot;: &quot;^6.0.0&quot;
+  }
+}
+" />
+    <input type="hidden" name="project[files][tsconfig.json]" value="{
+  &quot;compilerOptions&quot;: {
+    &quot;target&quot;: &quot;ES2020&quot;,
+    &quot;module&quot;: &quot;ESNext&quot;,
+    &quot;moduleResolution&quot;: &quot;bundler&quot;,
+    &quot;jsx&quot;: &quot;react-jsx&quot;,
+    &quot;strict&quot;: true,
+    &quot;esModuleInterop&quot;: true,
+    &quot;skipLibCheck&quot;: true,
+    &quot;forceConsistentCasingInFileNames&quot;: true
+  },
+  &quot;include&quot;: [&quot;src&quot;]
+}
+" />
+    <input type="hidden" name="project[files][vite.config.ts]" value="import { defineConfig } from &#x27;vite&#x27;;
+import react from &#x27;@vitejs/plugin-react&#x27;;
+
+export default defineConfig({
+  plugins: [react()],
+});
+" />
+    <input type="hidden" name="project[files][src/index.tsx]" value="import * as React from &#x27;react&#x27;;
+import * as ReactDOM from &#x27;react-dom/client&#x27;;
+import { StyledEngineProvider } from &#x27;@mui/material/styles&#x27;;
+import Demo from &#x27;./Demo&#x27;;
+
+ReactDOM.createRoot(document.querySelector(&#x27;#root&#x27;)!).render(
+  &lt;React.StrictMode&gt;
+    &lt;StyledEngineProvider injectFirst&gt;
+      &lt;Demo /&gt;
+    &lt;/StyledEngineProvider&gt;
+  &lt;/React.StrictMode&gt;,
+);
+" />
+    <input type="hidden" name="project[files][src/Demo.tsx]" value="import * as React from &#x27;react&#x27;;
+import Box from &#x27;@mui/material/Box&#x27;;
+import Typography from &#x27;@mui/material/Typography&#x27;;
+import {
+  DataGridPremium,
+  useGridApiRef,
+  type GridColDef,
+  type GridRowModel,
+  type GridRowsProp,
+} from &#x27;@mui/x-data-grid-premium&#x27;;
+import { useFillHandle, type FillUpdate } from &#x27;./useFillHandle&#x27;;
+
+// ---------------------------------------------------------------------------
+// Column definitions — all editable except `id`
+// ---------------------------------------------------------------------------
+
+const columns: GridColDef[] = [
+  { field: &#x27;id&#x27;, headerName: &#x27;ID&#x27;, width: 60, editable: false },
+  { field: &#x27;product&#x27;, headerName: &#x27;Product&#x27;, width: 150, editable: true },
+  { field: &#x27;category&#x27;, headerName: &#x27;Category&#x27;, width: 130, editable: true },
+  {
+    field: &#x27;price&#x27;,
+    headerName: &#x27;Price&#x27;,
+    width: 100,
+    type: &#x27;number&#x27;,
+    editable: true,
+  },
+  {
+    field: &#x27;quantity&#x27;,
+    headerName: &#x27;Quantity&#x27;,
+    width: 100,
+    type: &#x27;number&#x27;,
+    editable: true,
+  },
+  {
+    field: &#x27;rating&#x27;,
+    headerName: &#x27;Rating&#x27;,
+    width: 90,
+    type: &#x27;number&#x27;,
+    editable: true,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Sample data — 15 rows, some left empty so the user can fill into them
+// ---------------------------------------------------------------------------
+
+const initialRows: GridRowsProp = [
+  { id: 1, product: &#x27;Widget A&#x27;, category: &#x27;Gadgets&#x27;, price: 25.0, quantity: 100, rating: 4.5 },
+  { id: 2, product: &#x27;Widget B&#x27;, category: &#x27;Gadgets&#x27;, price: 30.0, quantity: 200, rating: 4.2 },
+  { id: 3, product: &#x27;Widget C&#x27;, category: &#x27;Gadgets&#x27;, price: 18.5, quantity: 150, rating: 3.8 },
+  { id: 4, product: &#x27;Gizmo X&#x27;, category: &#x27;Tools&#x27;, price: 55.0, quantity: 80, rating: 4.9 },
+  { id: 5, product: &#x27;Gizmo Y&#x27;, category: &#x27;Tools&#x27;, price: 42.0, quantity: 60, rating: 4.1 },
+  { id: 6, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+  { id: 7, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+  { id: 8, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+  { id: 9, product: &#x27;Doohickey&#x27;, category: &#x27;Parts&#x27;, price: 12.0, quantity: 500, rating: 3.5 },
+  { id: 10, product: &#x27;Thingamajig&#x27;, category: &#x27;Parts&#x27;, price: 8.75, quantity: 320, rating: 3.9 },
+  { id: 11, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+  { id: 12, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+  { id: 13, product: &#x27;Sprocket&#x27;, category: &#x27;Hardware&#x27;, price: 15.0, quantity: 420, rating: 4.6 },
+  { id: 14, product: &#x27;Cog&#x27;, category: &#x27;Hardware&#x27;, price: 9.25, quantity: 700, rating: 4.0 },
+  { id: 15, product: &#x27;&#x27;, category: &#x27;&#x27;, price: 0, quantity: 0, rating: 0 },
+];
+
+// ---------------------------------------------------------------------------
+// Demo component
+// ---------------------------------------------------------------------------
+
+export default function Demo() {
+  const apiRef = useGridApiRef();
+  const [rows, setRows] = React.useState&lt;GridRowsProp&gt;(initialRows);
+
+  // Sync fill-handle updates back into React state
+  const handleFill = React.useCallback((updates: FillUpdate[]) =&gt; {
+    setRows((prev) =&gt; {
+      const patchMap = new Map(updates.map((u) =&gt; [u.id, u]));
+      return prev.map((row) =&gt; {
+        const patch = patchMap.get(row.id);
+        return patch ? { ...row, ...patch } : row;
+      });
+    });
+  }, []);
+
+  // Activate the fill handle
+  useFillHandle(apiRef, handleFill);
+
+  // Keep React state in sync when the user edits a cell inline
+  const processRowUpdate = React.useCallback(
+    (newRow: GridRowModel) =&gt; {
+      setRows((prev) =&gt;
+        prev.map((r) =&gt; (r.id === newRow.id ? newRow : r)),
+      );
+      return newRow;
+    },
+    [],
+  );
+
+  return (
+    &lt;Box sx={{ width: &#x27;100%&#x27;, p: 3 }}&gt;
+      &lt;Typography variant=&quot;h5&quot; gutterBottom&gt;
+        DataGrid Premium — Drag Fill Handle (Userland)
+      &lt;/Typography&gt;
+      &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ mb: 2 }}&gt;
+        Select one or more cells in a column, then drag the small blue
+        square at the bottom-right corner of the selection up or down to
+        fill target cells with the source values.
+      &lt;/Typography&gt;
+
+      &lt;Box sx={{ height: 600 }}&gt;
+        &lt;DataGridPremium
+          apiRef={apiRef}
+          rows={rows}
+          columns={columns}
+          cellSelection
+          processRowUpdate={processRowUpdate}
+          sx={{
+            height: &#x27;100%&#x27;,
+
+            /* ── Fill-handle indicator (blue square) ─────────────── */
+            &#x27;&amp; .fill-handle-cell&#x27;: {
+              position: &#x27;relative&#x27;,
+            },
+            &#x27;&amp; .fill-handle-cell::after&#x27;: {
+              content: &#x27;&quot;&quot;&#x27;,
+              position: &#x27;absolute&#x27;,
+              bottom: -4,
+              right: -4,
+              width: 8,
+              height: 8,
+              backgroundColor: &#x27;primary.main&#x27;,
+              border: &#x27;2px solid #fff&#x27;,
+              cursor: &#x27;crosshair&#x27;,
+              zIndex: 50,
+              pointerEvents: &#x27;auto&#x27;,
+            },
+
+            /* ── Drag-preview styles ─────────────────────────────── */
+            &#x27;&amp; .fill-preview&#x27;: {
+              backgroundColor: &#x27;rgba(25, 118, 210, 0.08)&#x27;,
+            },
+            &#x27;&amp; .fill-preview-top&#x27;: {
+              borderTop: &#x27;2px dashed&#x27;,
+              borderTopColor: &#x27;primary.main&#x27;,
+            },
+            &#x27;&amp; .fill-preview-bottom&#x27;: {
+              borderBottom: &#x27;2px dashed&#x27;,
+              borderBottomColor: &#x27;primary.main&#x27;,
+            },
+            &#x27;&amp; .fill-preview-left&#x27;: {
+              borderLeft: &#x27;2px dashed&#x27;,
+              borderLeftColor: &#x27;primary.main&#x27;,
+            },
+            &#x27;&amp; .fill-preview-right&#x27;: {
+              borderRight: &#x27;2px dashed&#x27;,
+              borderRightColor: &#x27;primary.main&#x27;,
+            },
+          }}
+        /&gt;
+      &lt;/Box&gt;
+    &lt;/Box&gt;
+  );
+}
+" />
+    <input type="hidden" name="project[files][src/useFillHandle.ts]" value="/**
+ * useFillHandle — Userland drag-fill handle for MUI X DataGrid Premium.
+ *
+ * Adds an Excel-style fill handle to the bottom-right corner of the cell
+ * selection.  The user drags it up or down to fill target cells with the
+ * source values in a cycling pattern.
+ *
+ * Only PUBLIC DataGridPremium APIs are used — no internal imports.
+ */
+
+import { useEffect, useRef } from &#x27;react&#x27;;
+import type {
+  GridRowId,
+  GridCellParams,
+  GridColDef,
+} from &#x27;@mui/x-data-grid-premium&#x27;;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/** The apiRef shape we depend on (subset of GridApiPremium). */
+export interface FillHandleApi {
+  rootElementRef: React.RefObject&lt;HTMLElement | null&gt;;
+  getSelectedCellsAsArray: () =&gt; Array&lt;{ id: GridRowId; field: string }&gt;;
+  getCellParams: (id: GridRowId, field: string) =&gt; GridCellParams;
+  getColumn: (field: string) =&gt; GridColDef;
+  setCellSelectionModel: (
+    model: Record&lt;GridRowId, Record&lt;string, boolean&gt;&gt;,
+  ) =&gt; void;
+  getCellSelectionModel: () =&gt; Record&lt;GridRowId, Record&lt;string, boolean&gt;&gt;;
+  getSortedRowIds: () =&gt; GridRowId[];
+  getVisibleColumns: () =&gt; GridColDef[];
+  updateRows: (updates: Array&lt;Record&lt;string, unknown&gt;&gt;) =&gt; void;
+  subscribeEvent: (
+    event: string,
+    handler: (...args: unknown[]) =&gt; void,
+  ) =&gt; () =&gt; void;
+}
+
+export interface FillUpdate {
+  id: GridRowId;
+  [field: string]: unknown;
+}
+
+type ApiRef = React.RefObject&lt;FillHandleApi&gt;;
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+export function useFillHandle(
+  apiRef: ApiRef,
+  onFill?: (updates: FillUpdate[]) =&gt; void,
+): void {
+  // Keep onFill in a ref so the effect doesn&#x27;t re-run when it changes.
+  const onFillRef = useRef(onFill);
+  onFillRef.current = onFill;
+
+  useEffect(() =&gt; {
+    const api = apiRef.current;
+    if (!api) return;
+
+    // ── Drag state (plain variables — safe inside a single effect) ───
+    let isDragging = false;
+    let dragField = &#x27;&#x27;;
+    let sourceStartIdx = -1;
+    let sourceEndIdx = -1;
+    let sourceValues: unknown[] = [];
+    let currentTargetIds: GridRowId[] = [];
+    let decoratedEls = new Set&lt;HTMLElement&gt;();
+    let rafId = 0;
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    function getRootEl(): HTMLElement | null {
+      return api.rootElementRef?.current ?? null;
+    }
+
+    /** Locate a cell&#x27;s DOM element via data-attributes. */
+    function getCellEl(
+      rowId: GridRowId,
+      field: string,
+    ): HTMLElement | null {
+      const root = getRootEl();
+      if (!root) return null;
+      const escapedId = CSS.escape(String(rowId));
+      const escapedField = CSS.escape(field);
+      return root.querySelector&lt;HTMLElement&gt;(
+        `[data-id=&quot;${escapedId}&quot;] [data-field=&quot;${escapedField}&quot;]`,
+      );
+    }
+
+    /** Strip all preview CSS classes from previously-decorated elements. */
+    function clearPreviewClasses(): void {
+      for (const el of decoratedEls) {
+        el.classList.remove(
+          &#x27;fill-preview&#x27;,
+          &#x27;fill-preview-top&#x27;,
+          &#x27;fill-preview-bottom&#x27;,
+          &#x27;fill-preview-left&#x27;,
+          &#x27;fill-preview-right&#x27;,
+        );
+      }
+      decoratedEls = new Set();
+    }
+
+    /**
+     * Resolve a dataset.id string to the matching GridRowId (which may
+     * be a number).  Checks sorted IDs for both the raw string and its
+     * numeric conversion.
+     */
+    function resolveRowId(raw: string): GridRowId | null {
+      const sortedIds = api.getSortedRowIds();
+      if (sortedIds.includes(raw as GridRowId)) return raw;
+      const asNum = Number(raw);
+      if (!Number.isNaN(asNum) &amp;&amp; sortedIds.includes(asNum)) return asNum;
+      return null;
+    }
+
+    // ── 1. Position the fill handle on the bottom-right selected cell ─
+
+    const unsubSelection = api.subscribeEvent(
+      &#x27;cellSelectionChange&#x27;,
+      () =&gt; {
+        const root = getRootEl();
+        if (!root) return;
+
+        // Remove any existing marker
+        root
+          .querySelectorAll(&#x27;.fill-handle-cell&#x27;)
+          .forEach((el) =&gt; el.classList.remove(&#x27;fill-handle-cell&#x27;));
+
+        const selected = api.getSelectedCellsAsArray();
+        if (selected.length === 0) return;
+
+        const sortedIds = api.getSortedRowIds();
+        const visibleCols = api.getVisibleColumns();
+
+        let bestRowIdx = -1;
+        let bestColIdx = -1;
+        let bestCell: { id: GridRowId; field: string } | null = null;
+
+        for (const cell of selected) {
+          const ri = sortedIds.indexOf(cell.id);
+          const ci = visibleCols.findIndex((c) =&gt; c.field === cell.field);
+          if (ri &lt; 0 || ci &lt; 0) continue;
+          if (
+            ri &gt; bestRowIdx ||
+            (ri === bestRowIdx &amp;&amp; ci &gt; bestColIdx)
+          ) {
+            bestRowIdx = ri;
+            bestColIdx = ci;
+            bestCell = cell;
+          }
+        }
+
+        if (bestCell) {
+          getCellEl(bestCell.id, bestCell.field)?.classList.add(
+            &#x27;fill-handle-cell&#x27;,
+          );
+        }
+      },
+    );
+
+    // ── 2. Detect mousedown on the fill handle ──────────────────────
+
+    const unsubMouseDown = api.subscribeEvent(
+      &#x27;cellMouseDown&#x27;,
+      (...args: unknown[]) =&gt; {
+        const params = args[0] as GridCellParams;
+        const event = args[1] as React.MouseEvent&lt;HTMLElement&gt; &amp; {
+          defaultMuiPrevented?: boolean;
+        };
+
+        const cellEl = getCellEl(params.id, params.field);
+        if (!cellEl?.classList.contains(&#x27;fill-handle-cell&#x27;)) return;
+
+        // Hit-test: pointer must be within 14 px of the cell&#x27;s
+        // bottom-right corner (the fill handle zone).
+        const rect = cellEl.getBoundingClientRect();
+        if (
+          rect.right - event.clientX &gt; 14 ||
+          rect.bottom - event.clientY &gt; 14 ||
+          event.clientX &gt; rect.right + 4 ||
+          event.clientY &gt; rect.bottom + 4
+        ) {
+          return;
+        }
+
+        // Suppress the default MUI cell-selection drag
+        event.preventDefault();
+        event.stopPropagation();
+        event.defaultMuiPrevented = true;
+
+        // Check column is editable
+        const colDef = api.getColumn(params.field);
+        if (!colDef.editable) return;
+
+        // Gather source cells in this column
+        const selected = api.getSelectedCellsAsArray();
+        const inField = selected.filter((c) =&gt; c.field === params.field);
+        if (inField.length === 0) return;
+
+        const sortedIds = api.getSortedRowIds();
+        const indices = inField
+          .map((c) =&gt; sortedIds.indexOf(c.id))
+          .filter((i) =&gt; i &gt;= 0);
+        if (indices.length === 0) return;
+
+        isDragging = true;
+        dragField = params.field;
+        sourceStartIdx = Math.min(...indices);
+        sourceEndIdx = Math.max(...indices);
+
+        // Collect values in visual (sorted) order
+        sourceValues = [];
+        for (let i = sourceStartIdx; i &lt;= sourceEndIdx; i++) {
+          const id = sortedIds[i];
+          if (inField.some((c) =&gt; c.id === id)) {
+            sourceValues.push(api.getCellParams(id, dragField).value);
+          }
+        }
+
+        document.addEventListener(&#x27;mousemove&#x27;, onMouseMove);
+        document.addEventListener(&#x27;mouseup&#x27;, onMouseUp);
+      },
+    );
+
+    // ── 3. Mousemove — throttled via requestAnimationFrame ──────────
+
+    function onMouseMove(e: MouseEvent): void {
+      if (!isDragging) return;
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() =&gt;
+        handleMove(e.clientX, e.clientY),
+      );
+    }
+
+    function handleMove(clientX: number, clientY: number): void {
+      // Walk the elements under the pointer to find the target row
+      const hits = document.elementsFromPoint(clientX, clientY);
+      let targetRowId: GridRowId | null = null;
+
+      for (const hit of hits) {
+        let node: HTMLElement | null = hit as HTMLElement;
+        while (node) {
+          if (node.dataset?.id !== undefined) {
+            targetRowId = resolveRowId(node.dataset.id);
+            break;
+          }
+          node = node.parentElement;
+        }
+        if (targetRowId !== null) break;
+      }
+
+      if (targetRowId === null) {
+        // Pointer left the grid — clear preview
+        currentTargetIds = [];
+        clearPreviewClasses();
+        return;
+      }
+
+      const sortedIds = api.getSortedRowIds();
+      const targetIdx = sortedIds.indexOf(targetRowId);
+      if (targetIdx &lt; 0) return;
+
+      // Build the list of rows to fill
+      const newTargets: GridRowId[] = [];
+      if (targetIdx &gt; sourceEndIdx) {
+        // Filling downward
+        for (let i = sourceEndIdx + 1; i &lt;= targetIdx; i++) {
+          newTargets.push(sortedIds[i]);
+        }
+      } else if (targetIdx &lt; sourceStartIdx) {
+        // Filling upward
+        for (let i = targetIdx; i &lt; sourceStartIdx; i++) {
+          newTargets.push(sortedIds[i]);
+        }
+      }
+      // If targetIdx is within the source range → no fill → clear preview
+
+      currentTargetIds = newTargets;
+
+      // Apply preview decoration
+      const nextDecorated = new Set&lt;HTMLElement&gt;();
+
+      for (let i = 0; i &lt; newTargets.length; i++) {
+        const el = getCellEl(newTargets[i], dragField);
+        if (!el) continue;
+
+        el.classList.add(
+          &#x27;fill-preview&#x27;,
+          &#x27;fill-preview-left&#x27;,
+          &#x27;fill-preview-right&#x27;,
+        );
+        if (i === 0) el.classList.add(&#x27;fill-preview-top&#x27;);
+        if (i === newTargets.length - 1) el.classList.add(&#x27;fill-preview-bottom&#x27;);
+
+        nextDecorated.add(el);
+      }
+
+      // Remove classes from cells that left the target set
+      for (const el of decoratedEls) {
+        if (!nextDecorated.has(el)) {
+          el.classList.remove(
+            &#x27;fill-preview&#x27;,
+            &#x27;fill-preview-top&#x27;,
+            &#x27;fill-preview-bottom&#x27;,
+            &#x27;fill-preview-left&#x27;,
+            &#x27;fill-preview-right&#x27;,
+          );
+        }
+      }
+
+      decoratedEls = nextDecorated;
+    }
+
+    // ── 4. Mouseup — apply the fill and extend the selection ────────
+
+    function onMouseUp(): void {
+      document.removeEventListener(&#x27;mousemove&#x27;, onMouseMove);
+      document.removeEventListener(&#x27;mouseup&#x27;, onMouseUp);
+      cancelAnimationFrame(rafId);
+
+      if (
+        isDragging &amp;&amp;
+        currentTargetIds.length &gt; 0 &amp;&amp;
+        sourceValues.length &gt; 0
+      ) {
+        // Cycle source values into target rows
+        const updates: FillUpdate[] = currentTargetIds.map((id, i) =&gt; ({
+          id,
+          [dragField]: sourceValues[i % sourceValues.length],
+        }));
+
+        api.updateRows(updates);
+        onFillRef.current?.(updates);
+
+        // Extend cell selection to include filled rows
+        const model = { ...api.getCellSelectionModel() };
+        for (const id of currentTargetIds) {
+          if (!model[id]) model[id] = {};
+          model[id][dragField] = true;
+        }
+        api.setCellSelectionModel(model);
+      }
+
+      // Reset
+      isDragging = false;
+      dragField = &#x27;&#x27;;
+      sourceStartIdx = -1;
+      sourceEndIdx = -1;
+      sourceValues = [];
+      currentTargetIds = [];
+      clearPreviewClasses();
+    }
+
+    // ── Cleanup on unmount ──────────────────────────────────────────
+
+    return () =&gt; {
+      unsubSelection();
+      unsubMouseDown();
+      document.removeEventListener(&#x27;mousemove&#x27;, onMouseMove);
+      document.removeEventListener(&#x27;mouseup&#x27;, onMouseUp);
+      cancelAnimationFrame(rafId);
+      clearPreviewClasses();
+    };
+  }, [apiRef]);
+}
+" />
+    <input type="hidden" name="project[dependencies][@emotion/react]" value="latest" />
+    <input type="hidden" name="project[dependencies][@emotion/styled]" value="latest" />
+    <input type="hidden" name="project[dependencies][@mui/material]" value="latest" />
+    <input type="hidden" name="project[dependencies][@mui/x-data-grid-premium]" value="latest" />
+    <input type="hidden" name="project[dependencies][react]" value="latest" />
+    <input type="hidden" name="project[dependencies][react-dom]" value="latest" />
+  </form>
+  <script>document.getElementById('sbForm').submit();</script>
+</body>
+</html>
